@@ -8,26 +8,18 @@
 #and were downloaded on the same day that the script was run. If these conditions are all met, the script will export
 #two csv files titled "Encounters" and "Responses", each followed by the current date in a yyyyMMdd format, to the 
 #Downloads folder. From there, the Excel file prep and Access data upload can proceed as normal
-#NOTE: This script requires the dplyr and lubridate libraries. If you don't have them already, use the install.packages()
-#function to install them
+#NOTE: This script requires the dplyrlibrary. If you don't have them already, use the install.packages() function to 
+#install them
 
 #Purpose: This report is designed to map the new, renamed NRC fields to the original names designed to be used in the
 #Access file while also stripping away the extra fields that could interfere with the file and would unnecessarily increase
 #the file size and processing time. There are some instances where the field required more modifications than just renaming
-#the header to get it back in line with the original downloads. Mostly this was due to the new datetime formats: the new
-#datetime fields often add timezone modifiers, which are not innately recognized by Excel and are assumed to be strings, 
-#and add 3 decimal places to seconds. On the fields that don't have a timezone modifier, these decimal places seem to 
-#throw off Excel's assumptions on what to do with this time format, so only the hours, minutes, and seconds are displayed
-#instead of the years, months, and days. To make sure this latter display issue didn't mess anything up in Access and to
-#keep the data consistent with the previous datetime values that didn't have decimal places at all, the date is rounded to
-#the nearest whole second. For the timezone issue, the as.POSIXlt function is used to convert the string into a date value,
-#which can be modified and standardized from there. There are other modifications to the values as well, but those can be
-#described on a case-by-case basis
+#the header to get it back in line with the original downloads. These modifications will be described on a case-by-case 
+#basis within the script
 
-#The script was ignoring the decimal places (effectively flooring them), so the decimal place for seconds was increased
-#by 3, which is how it's set up in the csvs. The libraries are also called here. dplyr is used to make the data frame
-#modifications more legible, and lubridate is used to round off the decimals in the dates
-options(digits.secs = 3)
+#The libraries are called here. dplyr is used to make the data frame modifications more legible, and lubridate is used to
+#convert dates to strings without leading zeroes in the month, day, and hour positions, which is how the dates are set up in
+#the source datasets
 library(dplyr)
 library(lubridate)
 
@@ -45,19 +37,6 @@ nrc.df <- function(reg.pattern){
           .[1, ] %>%
           rownames %>%
           read.csv
-}
-
-#The date.format function formats datetime strings as dates, rounds off the seconds, and reformats as strings. If the
-#TZ data.type is used, the string includes the timezone and the as.POSIXlt function is needed to set it to central
-#standard time; otherwise the as.Date function is used
-date.format <- function(date.string, date.type){
-     if (date.type == "TZ") {
-          date.string.formatted <- as.POSIXlt(date.string, "America/Chicago", "%Y-%m-%dT%H:%M:%OS")
-     } else {
-          date.string.formatted <- as.Date(date.string)
-     }
-     round_date(date.string.formatted, unit = "seconds") %>%
-          format("%Y-%m-%d %H:%M:%S")
 }
 
 #The outreach.type.conversion function converts the revised approach to storing the outreach type, where it's now a numeric
@@ -106,17 +85,15 @@ dest.file <- list.files(paste("C:\\Users", Sys.info()[["user"]], "Downloads", se
      file.info
 
 #Reads the result file into R using the nrc.df function and transmutes the columns to match the original formatting of
-#the responses file. For most this just means changing the column names, but for the datetime values and a few other
-#additional adjustments need to be made. The transmute function was used because it only keeps those values you select to 
-#modify; all other columns are removed. For the datetime values, they are either identified as "TZ", meaning they contain
-#Timezone information, or "Unadjusted" meaning that they don't. All other adjustments are described where they occur in
-#the script
+#the responses file. For most this just means changing the column names, but for a few columns some additional
+#adjustments need to be made. The transmute function was used because it only keeps those values you select to modify;
+#all other columns are removed
 result.df <- nrc.df("result_") %>%
      transmute(Address = person_address,
                City = person_city,
-               CompleteDate = date.format(outreachattempt_completedate, "TZ"),
+               CompleteDate = outreachattempt_completedate,
                DischargeDr = medicalvisit_dischargedr,
-               DOB = date.format(as.character(person_dob), "Unadjusted"),
+               DOB = person_dob,
                Gender = person_gender,
                #The new language field is all capital letters, while the original only capitalized the first letter.
                #This script separates the first and following letters, makes the second part lowercase, and recombines them
@@ -126,7 +103,7 @@ result.df <- nrc.df("result_") %>%
                MaritalStatus = person_maritalstatus,
                MRN = medicalvisit_mrn,
                NRCEncounterID = medicalvisit_id,
-               OutreachDate = date.format(outreachattempt_sendondate, "TZ"),
+               OutreachDate = outreachattempt_sendondate,
                #The outreach.type.conversion function can only apply to string at a time, not an entire column. So the
                #sapply function is used to loop through the entire outreachattempt_surveymethod column and apply each row
                #to the function
@@ -154,31 +131,44 @@ result.df <- nrc.df("result_") %>%
                SpecialtyPassthru = specialtypassthru,
                State = person_state,
                Survey = questionpod_name,
-               VisitDate = date.format(medicalvisit_dischargedate, "TZ"),
+               VisitDate = medicalvisit_dischargedate,
                VisitType = medicalvisit_visittype,
                Zip = person_zip)
 
+#The date.to.string function takes a datetime value and converts it into a string. Because the format() function in base R
+#always adds leading zeros to months, days, and hours, and these positions do not have leading zeros in the csv files, this
+#function is used. Lubridate returns numeric values for each place, so no leading zeros will be present. Because the minute
+#and second positions do have leading zeros in the csv, the format() function is used there. However, a string of NAs, 
+#separated by the separator values in the paste statements, would appear if these commands were used on a whole column,
+#so this function is intended to be used with apply() functions and returns NA if a data element is blank
+date.to.string <- function(date.value){
+     ifelse(!is.na(date.value),
+            paste0(
+                 paste(month(date.value), day(date.value), year(date.value), sep = '/'), 
+                   ' ', hour(date.value), ':', format(date.value, '%M:%S')),
+     NA)
+}
 #Reads the outreachattempt file into R using the nrc.df function and transmutes the columns to match the original formatting 
-#of the encounters file. For most this just means changing the column names, but for the datetime values and a few other
-#additional adjustments need to be made. The transmute function was used because it only keeps those values you select to 
-#modify; all other columns are removed. For the datetime values, they are either identified as "TZ", meaning they contain
-#Timezone information, or "Unadjusted" meaning that they don't. All other adjustments are described where they occur in
-#the script. Because the original encounters file only showed the most recent outreach attempt and the outreachattempt file
-#shows all attempts, the table is grouped on its NRCEncounterID, which occurs only once per encounter, and the max value of
-#the OutreachDate, CompleteDate, and OutreachType is obtained for each ID via the summarize function.
+#of the encounters file. For most this just means changing the column names, but for a few columns some additional
+#adjustments need to be made. The transmute function was used because it only keeps those values you select to modify; all
+#other columns are removed. The as.POSIXct function is used because the summarize function further down requires that these
+#values be in the datetime format. Because the original encounters file only showed the most recent outreach attempt and the 
+#outreachattempt file shows all attempts, the table is grouped on its NRCEncounterID, which occurs only once per encounter,
+#and the max value of the OutreachDate, CompleteDate, and OutreachType is obtained for each ID via the summarize function.
 #na.rm is used so that the presence of NAs doesn't cause the the max function to just return an NA regardless of any dates
 #present. This results in warnings for IDs where only NAs are present, but otherwise the function works as intended. 
 #Finally, the mutate function is used to adjust the Outreach function to exclude the outreachattempt_id and equate the
 #numeric survey method value with its string counterpart (which can only be done one value at a time, which is why the sapply
 #loop function is applied over the OutreachType column) without removing all of the other columns, which is what happens with
-#the transmute function
+#the transmute function. Mutate is also used to convert the CompleteDate and OutreachDate values into strings via the 
+#date.to.string function. The sapply loop is needed in case the value is a NA, so the columns must be converted point-by-point
 outcomes.df <- nrc.df("outreachattempt_") %>%
      transmute(NRCEncounterID = medicalvisit_id,
-               CompleteDate = date.format(outreachattempt_completedate, "TZ"),
+               CompleteDate = as.POSIXct(outreachattempt_completedate, format = "%m/%d/%Y %H:%M:%S"),
                #Formerly this field was just a TRUE/FALSE description of if the survey had ben completed or not. The TRUEs
                #in the original line up with only 'Survey Complete' in the current version, so all others are considered FALSE
                IsReturned = ifelse(outreachattempt_currentstatusdescription == 'Survey Complete', 'TRUE', 'FALSE'),
-               OutreachDate = date.format(outreachattempt_sendondate, "TZ"),
+               OutreachDate = as.POSIXct(outreachattempt_sendondate, format = "%m/%d/%Y %H:%M:%S"),
                #Only the most recent outreachattempt_surveymethod is needed, and the other datetime fields that contain
                #unique times for each outreach attempt are often NULL. Because of this and outreachattempt_id is sequential,
                #it is used to identify the most recent outreach attempt instead of a date field
@@ -186,24 +176,24 @@ outcomes.df <- nrc.df("outreachattempt_") %>%
      group_by(NRCEncounterID) %>%
      summarize(OutreachDate = max(OutreachDate, na.rm = TRUE), CompleteDate = max(CompleteDate, na.rm = TRUE),
                IsReturned = max(IsReturned, na.rm = TRUE), OutreachType = max(AllOutreachType, na.rm = TRUE)) %>%
-     mutate(OutreachType = sapply(.$OutreachType, outreach.type.conversion))
+     mutate(OutreachType = sapply(.$OutreachType, outreach.type.conversion), 
+            CompleteDate = sapply(CompleteDate, date.to.string),
+            OutreachDate = sapply(OutreachDate, date.to.string))
 
 #Reads the encounter file into R using the nrc.df function and transmutes the columns to match the original formatting 
-#of the encounters file. For most this just means changing the column names, but for the datetime values and a few other
-#additional adjustments need to be made. The transmute function was used because it only keeps those values you select to 
-#modify; all other columns are removed. For the datetime values, they are either identified as "TZ", meaning they contain
-#Timezone information, or "Unadjusted" meaning that they don't. All other adjustments are described where they occur in
-#the script. The original encounters file contained outcomes information, which is now stored in the outcomeattempts file.
-#To obtain this information, the results of the transmuted encounter file are merged with the already transmuted outreach
-#file on the NRCEncounterID field. The outreach file already contains only the maximum results for each field to match the
-#contents of the original encounter file. The merger throws off the order of the fields by putting NRCEncounterID at the 
-#beginning and the outreach data at the end, which doesn't match the original outline. The select statement is used to
-#reorder these columns to match the original outline
+#of the encounters file. For most this just means changing the column names, but for a few columns some additional
+#adjustments need to be made. The transmute function was used because it only keeps those values you select to modify;
+#all other columns are removed. The original encounters file contained outcomes information, which is now stored in the 
+#outcomeattempts file. To obtain this information, the results of the transmuted encounter file are merged with the already 
+#transmuted outreach file on the NRCEncounterID field. The outreach file already contains only the maximum results for each
+#field to match the contents of the original encounter file. The merger throws off the order of the fields by putting 
+#NRCEncounterID at the beginning and the outreach data at the end, which doesn't match the original outline. The select 
+#statement is used to reorder these columns to match the original outline
 encounter.df <- nrc.df("encounter_") %>%
      transmute(Address = person_address,
                City = person_city,
                DischargeDr = medicalvisit_dischargedr,
-               DOB = date.format(as.character(person_dob), "Unadjusted"),
+               DOB = person_dob,
                Gender = person_gender,
                #The new language field is all capital letters, while the original only capitalized the first letter.
                #This script separates the first and following letters, makes the second part lowercase, and recombines them
@@ -229,7 +219,7 @@ encounter.df <- nrc.df("encounter_") %>%
                SpecialtyPassthru = specialtypassthru,
                State = person_state,
                Survey = questionpod_name,
-               VisitDate = date.format(medicalvisit_dischargedate, "TZ"),
+               VisitDate = medicalvisit_dischargedate,
                VisitType = medicalvisit_visittype,
                Zip = person_zip) %>%
      merge(outcomes.df, by = "NRCEncounterID") %>%

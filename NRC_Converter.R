@@ -105,7 +105,7 @@ write.to.folder <- function(df, file.name){
 #outreachattempt, followed by an underscore and the current day. The initial collection of these specific files is
 #obtained with the list.files function, and that list is then used to collect information about these files via the
 #file.info function, which produces the data frame
-current.day <- format(Sys.Date() - 1, "%Y%m%d")
+current.day <- format(Sys.Date(), "%Y%m%d")
 dest.file <- list.files(paste("C:\\Users", Sys.info()[["user"]], "Downloads", sep = "\\"),
                         pattern = paste0("^(result|encounter|outreachattempt)_", current.day), 
                         full.names = TRUE) %>%

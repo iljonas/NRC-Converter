@@ -64,6 +64,63 @@ outreach.type.conversion <- function(outreach.value){
      }
 }
 
+#Nurse Advice Line entries don't provide a financial number (FIN), so a placeholder is provided that consists of a dash, the 
+#date of the call, and the patient MRN. This string is too long for the Access upload, which only allows for 15 characters
+#max. For these entries, the string is reformatted to have no dash and a much shorter date string (yymmdd). To start, the
+#string doesn't have a leading zero for day value, which the as.Date function requires. The string always starts with the 3
+#character month value followed by one or two spaces (sometimes an extra space is used when the day value is only one digit,
+#but this might only be for older data), a single digit, and finally followed by another space, after which would be the year 
+#and the rest of the string. The match.string captures this formatting and separates the string before and after the space(s)
+#preceeding the day as two sections in parentheses. If the string matches this formatting, then gsub is used to replace the
+#space(s) with one space and a leading zero. The first and second parts of the string are on either side of these characters.
+#Otherwise, the regular value is used, converted from a factor to a character for consistency.
+#From here, the end position of the date value is determined (the M in AM or PM). This is done by splitting the string along
+#the colon character, which is consistently in all strings (as the separater between hours and minutes) and is unique in the
+#string. The resulting array is then unlisted and the first half is extracted. The number of characters in this string plus
+#an additional five (for the two seconds digits, the space, and AM/PM) represent the end position value of the date portion
+#of the string. 
+#The MRN is also extracted using the str.end.pos value. The MRN starts immediately after the str.end.pos and continues to
+#the end of the string (or the total number of characters in FIN).
+#Finally, the date itself can be extracted. This is done by taking a substring of FIN from the second position of the string
+#(after the dash) to the str.end.pos value. This is converted into a date value based on its characteristic format, and then
+#that date value is converted back into a 6 character string. Lastly, the MRN is amended to the end of this string, and the
+#value is returned
+FIN.formatted <- function(FIN){
+     match.string <- '(^-[A-Z][a-z]{2})[ ]{1,2}([1-9] .*)'
+     FIN <- if_else(grepl(match.string, FIN), 
+                    gsub(match.string, '\\1 0\\2', FIN), 
+                    as.character(FIN))
+     
+     str.end.pos <- FIN %>%
+          strsplit(':') %>%
+          .[[1]] %>%
+          .[1] %>%
+          nchar %>%
+          + 5
+     
+     mrn <- substr(FIN, str.end.pos + 1, nchar(as.character(FIN)))
+     
+     date.string <- FIN %>%
+          substr(2, str.end.pos) %>%
+          as.Date('%b %d %Y %I:%M%p') %>%
+          format('%y%m%d') %>%
+          paste0(mrn)
+}
+
+#The date.to.string function takes a datetime value and converts it into a string. Because the format() function in base R
+#always adds leading zeros to months, days, and hours, and these positions do not have leading zeros in the csv files, this
+#function is used. Lubridate returns numeric values for each place, so no leading zeros will be present. Because the minute
+#and second positions do have leading zeros in the csv, the format() function is used there. However, a string of NAs, 
+#separated by the separator values in the paste statements, would appear if these commands were used on a whole column,
+#so this function is intended to be used with apply() functions and returns NA if a data element is blank
+date.to.string <- function(date.value){
+     ifelse(!is.na(as.character(date.value)),
+            paste0(
+                 paste(month(date.value), day(date.value), year(date.value), sep = '/'), 
+                 ' ', hour(date.value), ':', format(date.value, '%M:%S')),
+            NA)
+}
+
 #The write.to.folder function generates the folder pathway (based on the current user) to the Downloads folder and
 #names the file after the provided file name combined with the day that this script was run. It also includes additional
 #parameters to specify that it's comma separated, NA values should be replaced with blanks, and row names shouldn't be
@@ -87,7 +144,7 @@ dest.file <- list.files(paste("C:\\Users", Sys.info()[["user"]], "Downloads", se
 #Reads the result file into R using the nrc.df function and transmutes the columns to match the original formatting of
 #the responses file. For most this just means changing the column names, but for a few columns some additional
 #adjustments need to be made. The transmute function was used because it only keeps those values you select to modify;
-#all other columns are removed
+#all other columns are removed.
 result.df <- nrc.df("result_") %>%
      transmute(Address = person_address,
                City = person_city,
@@ -109,7 +166,10 @@ result.df <- nrc.df("result_") %>%
                #to the function
                OutreachType = sapply(.$outreachattempt_surveymethod, outreach.type.conversion),
                Passthru01 = passthru_01,
-               Passthru02 = passthru_02,
+               #If the FIN starts with a dash, then it's for the Nurse Advice Line and doesn't represent an account. These
+               #strings need to be reformatted to to save space. If there is no dash, it is added as normal.
+               Passthru02 = if_else(grepl('^-', medicalvisit_visitnum), 
+                                    sapply(medicalvisit_visitnum, FIN.formatted), as.character(medicalvisit_visitnum)),
                Passthru03 = passthru_03,
                Passthru04 = passthru_04,
                Passthru05 = passthru_05,
@@ -135,19 +195,6 @@ result.df <- nrc.df("result_") %>%
                VisitType = medicalvisit_visittype,
                Zip = person_zip)
 
-#The date.to.string function takes a datetime value and converts it into a string. Because the format() function in base R
-#always adds leading zeros to months, days, and hours, and these positions do not have leading zeros in the csv files, this
-#function is used. Lubridate returns numeric values for each place, so no leading zeros will be present. Because the minute
-#and second positions do have leading zeros in the csv, the format() function is used there. However, a string of NAs, 
-#separated by the separator values in the paste statements, would appear if these commands were used on a whole column,
-#so this function is intended to be used with apply() functions and returns NA if a data element is blank
-date.to.string <- function(date.value){
-     ifelse(!is.na(date.value),
-            paste0(
-                 paste(month(date.value), day(date.value), year(date.value), sep = '/'), 
-                   ' ', hour(date.value), ':', format(date.value, '%M:%S')),
-     NA)
-}
 #Reads the outreachattempt file into R using the nrc.df function and transmutes the columns to match the original formatting 
 #of the encounters file. For most this just means changing the column names, but for a few columns some additional
 #adjustments need to be made. The transmute function was used because it only keeps those values you select to modify; all
@@ -167,7 +214,7 @@ outcomes.df <- nrc.df("outreachattempt_") %>%
                CompleteDate = as.POSIXct(outreachattempt_completedate, format = "%m/%d/%Y %H:%M:%S"),
                #Formerly this field was just a TRUE/FALSE description of if the survey had ben completed or not. The TRUEs
                #in the original line up with only 'Survey Complete' in the current version, so all others are considered FALSE
-               IsReturned = ifelse(outreachattempt_currentstatusdescription == 'Survey Complete', 'TRUE', 'FALSE'),
+               IsReturned = if_else(outreachattempt_currentstatusdescription == 'Survey Complete', 'TRUE', 'FALSE'),
                OutreachDate = as.POSIXct(outreachattempt_sendondate, format = "%m/%d/%Y %H:%M:%S"),
                #Only the most recent outreachattempt_surveymethod is needed, and the other datetime fields that contain
                #unique times for each outreach attempt are often NULL. Because of this and outreachattempt_id is sequential,
@@ -176,19 +223,20 @@ outcomes.df <- nrc.df("outreachattempt_") %>%
      group_by(NRCEncounterID) %>%
      summarize(OutreachDate = max(OutreachDate, na.rm = TRUE), CompleteDate = max(CompleteDate, na.rm = TRUE),
                IsReturned = max(IsReturned, na.rm = TRUE), OutreachType = max(AllOutreachType, na.rm = TRUE)) %>%
-     mutate(OutreachType = sapply(.$OutreachType, outreach.type.conversion), 
+     mutate(OutreachType = sapply(OutreachType, outreach.type.conversion), 
             CompleteDate = sapply(CompleteDate, date.to.string),
             OutreachDate = sapply(OutreachDate, date.to.string))
 
 #Reads the encounter file into R using the nrc.df function and transmutes the columns to match the original formatting 
 #of the encounters file. For most this just means changing the column names, but for a few columns some additional
 #adjustments need to be made. The transmute function was used because it only keeps those values you select to modify;
-#all other columns are removed. The original encounters file contained outcomes information, which is now stored in the 
-#outcomeattempts file. To obtain this information, the results of the transmuted encounter file are merged with the already 
-#transmuted outreach file on the NRCEncounterID field. The outreach file already contains only the maximum results for each
-#field to match the contents of the original encounter file. The merger throws off the order of the fields by putting 
-#NRCEncounterID at the beginning and the outreach data at the end, which doesn't match the original outline. The select 
-#statement is used to reorder these columns to match the original outline
+#all other columns are removed. Additionally, any row with a blank Financial Number (in the Passthru02 field) isn't 
+#supposed to be in the data output, so it's removed from the report. The original encounters file contained outcomes 
+#information, which is now stored in the outcomeattempts file. To obtain this information, the results of the transmuted
+#encounter file are merged with the already transmuted outreach file on the NRCEncounterID field. The outreach file
+#already contains only the maximum results for each field to match the contents of the original encounter file. The merger
+#throws off the order of the fields by putting NRCEncounterID at the beginning and the outreach data at the end, which 
+#doesn't match the original outline. The select statement is used to reorder these columns to match the original outline
 encounter.df <- nrc.df("encounter_") %>%
      transmute(Address = person_address,
                City = person_city,
@@ -204,7 +252,10 @@ encounter.df <- nrc.df("encounter_") %>%
                MRN = medicalvisit_mrn,
                NRCEncounterID = medicalvisit_id,
                Passthru01 = passthru_01,
-               Passthru02 = passthru_02,
+               #If the FIN starts with a dash, then it's for the Nurse Advice Line and doesn't represent an account. These
+               #strings need to be reformatted to to save space. If there is no dash, it is added as normal.
+               Passthru02 = if_else(grepl('^-', medicalvisit_visitnum), 
+                                          sapply(medicalvisit_visitnum, FIN.formatted), as.character(medicalvisit_visitnum)),
                Passthru03 = passthru_03,
                Passthru04 = passthru_04,
                Passthru05 = passthru_05,
@@ -222,6 +273,7 @@ encounter.df <- nrc.df("encounter_") %>%
                VisitDate = medicalvisit_dischargedate,
                VisitType = medicalvisit_visittype,
                Zip = person_zip) %>%
+     filter(!is.na(Passthru02)) %>%
      merge(outcomes.df, by = "NRCEncounterID") %>%
      select(Address, City, CompleteDate, DischargeDr:Gender, IsReturned, Language:MRN, NRCEncounterID,
             OutreachDate, OutreachType, Passthru01:Zip)

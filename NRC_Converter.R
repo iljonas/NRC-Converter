@@ -66,45 +66,15 @@ outreach.type.conversion <- function(outreach.value){
 
 #Nurse Advice Line entries don't provide a financial number (FIN), so a placeholder is provided that consists of a dash, the 
 #date of the call, and the patient MRN. This string is too long for the Access upload, which only allows for 15 characters
-#max. For these entries, the string is reformatted to have no dash and a much shorter date string (yymmdd). To start, the
-#string doesn't have a leading zero for day value, which the as.Date function requires. The string always starts with the 3
-#character month value followed by one or two spaces (sometimes an extra space is used when the day value is only one digit,
-#but this might only be for older data), a single digit, and finally followed by another space, after which would be the year 
-#and the rest of the string. The match.string captures this formatting and separates the string before and after the space(s)
-#preceeding the day as two sections in parentheses. If the string matches this formatting, then gsub is used to replace the
-#space(s) with one space and a leading zero. The first and second parts of the string are on either side of these characters.
-#Otherwise, the regular value is used, converted from a factor to a character for consistency.
-#From here, the end position of the date value is determined (the M in AM or PM). This is done by splitting the string along
-#the colon character, which is consistently in all strings (as the separater between hours and minutes) and is unique in the
-#string. The resulting array is then unlisted and the first half is extracted. The number of characters in this string plus
-#an additional five (for the two seconds digits, the space, and AM/PM) represent the end position value of the date portion
-#of the string. 
-#The MRN is also extracted using the str.end.pos value. The MRN starts immediately after the str.end.pos and continues to
-#the end of the string (or the total number of characters in FIN).
-#Finally, the date itself can be extracted. This is done by taking a substring of FIN from the second position of the string
-#(after the dash) to the str.end.pos value. This is converted into a date value based on its characteristic format, and then
-#that date value is converted back into a 6 character string. Lastly, the MRN is amended to the end of this string, and the
-#value is returned
-FIN.formatted <- function(FIN){
-     match.string <- '(^-[A-Z][a-z]{2})[ ]{1,2}([1-9] .*)'
-     FIN <- if_else(grepl(match.string, FIN), 
-                    gsub(match.string, '\\1 0\\2', FIN), 
-                    as.character(FIN))
-     
-     str.end.pos <- FIN %>%
-          strsplit(':') %>%
-          .[[1]] %>%
-          .[1] %>%
-          nchar %>%
-          + 5
-     
-     mrn <- substr(FIN, str.end.pos + 1, nchar(as.character(FIN)))
-     
-     date.string <- FIN %>%
-          substr(2, str.end.pos) %>%
-          as.Date('%b %d %Y %I:%M%p') %>%
+#max. For these entries, the string is reformatted to have no dash and a much shorter date string (yymmdd). To accomplish
+#this, the two fields that compose this placeholder value, medicalvisit_dichargedate and medicalvisit_mrn, are formatted
+#and combined to create a shorter version of the string. First the discharge date is converted from a string to POSIXct, 
+#and then that date value is converted back into a 6 character string (yyMMdd). This value is then appended with the MRN
+FIN.formatted <- function(discharge.date, MRN){
+     discharge.date %>% 
+          as.POSIXct(format = "%m/%d/%Y %H:%M:%S") %>%
           format('%y%m%d') %>%
-          paste0(mrn)
+          paste0(MRN)
 }
 
 #The date.to.string function takes a datetime value and converts it into a string. Because the format() function in base R
@@ -135,7 +105,7 @@ write.to.folder <- function(df, file.name){
 #outreachattempt, followed by an underscore and the current day. The initial collection of these specific files is
 #obtained with the list.files function, and that list is then used to collect information about these files via the
 #file.info function, which produces the data frame
-current.day <- format(Sys.Date(), "%Y%m%d")
+current.day <- format(Sys.Date() - 1, "%Y%m%d")
 dest.file <- list.files(paste("C:\\Users", Sys.info()[["user"]], "Downloads", sep = "\\"),
                         pattern = paste0("^(result|encounter|outreachattempt)_", current.day), 
                         full.names = TRUE) %>%
@@ -167,9 +137,11 @@ result.df <- nrc.df("result_") %>%
                OutreachType = sapply(.$outreachattempt_surveymethod, outreach.type.conversion),
                Passthru01 = passthru_01,
                #If the FIN starts with a dash, then it's for the Nurse Advice Line and doesn't represent an account. These
-               #strings need to be reformatted to to save space. If there is no dash, it is added as normal.
-               Passthru02 = if_else(grepl('^-', medicalvisit_visitnum), 
-                                    sapply(medicalvisit_visitnum, FIN.formatted), as.character(medicalvisit_visitnum)),
+               #strings need to be reformatted, by combining their composite parts (discharge date and mrn) to to save 
+               #space. If there is no dash, it is added as normal.
+               Passthru02 = if_else(grepl('^-', medicalvisit_visitnum),
+                                    FIN.formatted(medicalvisit_dischargedate, medicalvisit_mrn),
+                                    as.character(medicalvisit_visitnum)),
                Passthru03 = passthru_03,
                Passthru04 = passthru_04,
                Passthru05 = passthru_05,
@@ -253,9 +225,11 @@ encounter.df <- nrc.df("encounter_") %>%
                NRCEncounterID = medicalvisit_id,
                Passthru01 = passthru_01,
                #If the FIN starts with a dash, then it's for the Nurse Advice Line and doesn't represent an account. These
-               #strings need to be reformatted to to save space. If there is no dash, it is added as normal.
-               Passthru02 = if_else(grepl('^-', medicalvisit_visitnum), 
-                                          sapply(medicalvisit_visitnum, FIN.formatted), as.character(medicalvisit_visitnum)),
+               #strings need to be reformatted, by combining their composite parts (discharge date and mrn) to to save 
+               #space. If there is no dash, it is added as normal.
+               Passthru02 = if_else(grepl('^-', medicalvisit_visitnum),
+                                    FIN.formatted(medicalvisit_dischargedate, medicalvisit_mrn),
+                                    as.character(medicalvisit_visitnum)),
                Passthru03 = passthru_03,
                Passthru04 = passthru_04,
                Passthru05 = passthru_05,
